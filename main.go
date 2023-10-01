@@ -260,22 +260,39 @@ func handleWebsocket(c *gin.Context) {
 	}
 }
 
-func main() {
-	r := gin.Default()
-	config := cors.DefaultConfig()
-	config.AllowOrigins = []string{"*"} // You can specify the allowed origins here. "*" allows all origins.
-	config.AllowMethods = []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}
-	config.AllowHeaders = []string{"Origin", "Content-Type", "Content-Length", "Accept-Encoding", "X-CSRF-Token", "Authorization"}
-
-	r.Use(cors.New(config))
+func connectToPostgresDB() {
 	var err error
 	db, err = gorm.Open("postgres", "postgresql://postgres:VhdLOGcRBFAHk0lX2Jo5@containers-us-west-47.railway.app:7110/railway?sslmode=disable")
 	if err != nil {
 		panic("Failed to connect to database")
 	}
+}
+
+func createUserTable() {
+
 	db.AutoMigrate(&User{})
+}
+
+func addCors(r *gin.Engine) {
+	config := cors.DefaultConfig()
+	config.AllowOrigins = []string{"http://localhost:3000"} // You can specify the allowed origins here. "*" allows all origins.
+	config.AllowMethods = []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}
+	config.AllowHeaders = []string{"Origin", "Content-Type", "Content-Length", "Accept-Encoding", "X-CSRF-Token", "Authorization"}
+
+	r.Use(cors.New(config))
+
+}
+
+func main() {
+	r := gin.Default()
+	addCors(r)
+	connectToPostgresDB()
+
+	createUserTable()
+
 	initMongoDB()
 	initMongoCollections()
+
 	defer db.Close()
 
 	r.GET("/messages", JWTMiddleware(), getAllMessages)
