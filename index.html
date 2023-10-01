@@ -1,38 +1,82 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>WebSocket Chat</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chat App</title>
+    <!-- Add Tailwind CSS CDN link -->
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.15/dist/tailwind.min.css" rel="stylesheet">
+    <!-- Add custom CSS for styling -->
+    <style>
+        /* Customize styles here */
+    </style>
 </head>
-<body>
-    <div id="chat">
-        <input type="text" id="message" placeholder="Type your message...">
-        <button onclick="sendMessage()">Send</button>
-        <ul id="messages"></ul>
+<body class="bg-gray-100 h-screen flex flex-col">
+    <div class="flex-1 p-4">
+        <div id="chatContainer" class="bg-white rounded-lg shadow-lg p-4 h-96 overflow-y-auto">
+            <!-- Chat messages go here -->
+        </div>
     </div>
-
+    <div class="bg-white p-4">
+        <div class="flex">
+            <input id="messageInput" type="text" placeholder="Type your message..." class="flex-1 border rounded p-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
+            <button id="sendButton" class="ml-2 px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500">Send</button>
+        </div>
+    </div>
+    
+    <!-- Add JavaScript for chat functionality -->
     <script>
-        const socket = new WebSocket('ws://localhost:8080/ws'); // Update the WebSocket URL if needed
+        const messageInput = document.getElementById('messageInput');
+        const sendButton = document.getElementById('sendButton');
+        const chatContainer = document.getElementById('chatContainer');
+        let socket;
 
-        socket.addEventListener('open', (event) => {
-            socket.send("eeyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoxfQ.RTekvj49A01hoZw-4OZ4VzmR0jsMRsgud08Rn8LvGAY"); 
-            console.log('WebSocket connection opened:', event);
-
-            // Implement any initialization logic here, if needed
-        });
-
-        socket.addEventListener('message', (event) => {
-            const messagesList = document.getElementById('messages');
-            const messageItem = document.createElement('li');
-            messageItem.textContent = event.data;
-            messagesList.appendChild(messageItem);
-        });
-
-        function sendMessage() {
-            const messageInput = document.getElementById('message');
-            const message = messageInput.value;
-            socket.send(message);
-            messageInput.value = '';
+        // Function to add a message to the chat container
+        function addMessage(message, isSentByCurrentUser) {
+            const messageDiv = document.createElement('div');
+            messageDiv.classList.add('p-2', 'mb-2', 'max-w-xs', 'rounded', 'shadow', 'bg-blue-500', 'text-white');
+            if (isSentByCurrentUser) {
+                messageDiv.classList.add('ml-auto', 'bg-green-500');
+            }
+            messageDiv.textContent = message;
+            chatContainer.appendChild(messageDiv);
+            chatContainer.scrollTop = chatContainer.scrollHeight; // Scroll to the bottom
         }
+
+        // Create a WebSocket connection to your backend
+        socket = new WebSocket("ws://localhost:8080/ws");
+
+        // Event listener for when the WebSocket connection is opened
+        socket.addEventListener('open', (event) => {
+            console.log('WebSocket connection opened.');
+        });
+
+        // Event listener for receiving messages from the server
+        socket.addEventListener('message', (event) => {
+            // console.log(event)
+            const message = event.data;
+            addMessage(message, false); // Add the received message to the chat
+        });
+
+        // Event listener for errors
+        socket.addEventListener('error', (event) => {
+            console.error('WebSocket error:', event);
+        });
+
+        // Event listener for when the WebSocket connection is closed
+        socket.addEventListener('close', (event) => {
+            console.log('WebSocket connection closed.');
+        });
+
+        // Event listener for sending messages
+        sendButton.addEventListener('click', () => {
+            const message = messageInput.value;
+            if (message.trim() !== '') {
+                socket.send(message); // Send the message to the server
+                // addMessage(message, true); // Add the sent message to the chat
+                // messageInput.value = ''; // Clear the input field
+            }
+        });
     </script>
 </body>
 </html>
