@@ -140,6 +140,29 @@ func Login(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"token": tokenString})
 }
 
+func getAllMessages(c *gin.Context) {
+	user, _ := c.Get("user_id")
+	options := options.Find()
+	cursor, err := messageCol.Find(context.Background(), options)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to retrieve messages"})
+		return
+	}
+	defer cursor.Close(context.Background())
+
+	var messages []Message
+	for cursor.Next(context.Background()) {
+		var message Message
+		if err := cursor.Decode(&message); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to decode message"})
+			return
+		}
+		messages = append(messages, message)
+	}
+
+	c.JSON(http.StatusOK, gin.H{"msg": messages, "userId": user})
+}
+
 func initMongoDB() {
 	clientOptions := options.Client().ApplyURI("mongodb://mongo:p5DqtCP4sd2psY7qvpzz@containers-us-west-136.railway.app:6055") // Update with your MongoDB URI
 	client, err := mongo.Connect(context.Background(), clientOptions)
@@ -176,20 +199,6 @@ func StoreMessage(text string, userID uint) {
 	}
 }
 
-// Broadcast a message to all connected clients.
-// func broadcastMessage(message []byte) {
-// 	mutex.Lock()
-// 	defer mutex.Unlock()
-
-//		for conn := range clients {
-//			if err := conn.WriteMessage(websocket.TextMessage, message); err != nil {
-//				// Handle any errors that occur while sending the message.
-//				// You may want to remove the client from the list if an error occurs.
-//				conn.Close()
-//				delete(clients, conn)
-//			}
-//		}
-//	}
 func handleBroadcast() {
 	for {
 		message := <-broadcast
@@ -205,6 +214,52 @@ func handleBroadcast() {
 		}
 	}
 }
+func handleWebsocket(c *gin.Context) {
+	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	defer conn.Close()
+
+	// Add the new client to the list of clients.
+	mutex.Lock()
+	clients[conn] = true
+	mutex.Unlock()
+
+	// Handle incoming messages from clients
+	go func() {
+		for {
+			var msg Message
+			err := conn.ReadJSON(&msg)
+			if err != nil {
+				log.Println(err)
+				return
+			}
+
+			StoreMessage(msg.Text, msg.UserID)
+		}
+	}()
+
+	for {
+		var msg Message
+		err := conn.ReadJSON(&msg)
+		if err != nil {
+			// Remove the client from the list of clients.
+			mutex.Lock()
+			delete(clients, conn)
+			mutex.Unlock()
+			break
+		}
+
+		// Handle incoming messages and store them in MongoDB
+		StoreMessage(msg.Text, msg.UserID)
+
+		// For demonstration, we'll simply broadcast the message to all connected clients.
+		broadcast <- msg
+	}
+}
+
 func main() {
 	r := gin.Default()
 	config := cors.DefaultConfig()
@@ -223,82 +278,11 @@ func main() {
 	initMongoCollections()
 	defer db.Close()
 
-	r.GET("/messages", JWTMiddleware(), func(c *gin.Context) {
-		user, _ := c.Get("user_id")
-		options := options.Find()
-		cursor, err := messageCol.Find(context.Background(), options)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to retrieve messages"})
-			return
-		}
-		defer cursor.Close(context.Background())
-
-		var messages []Message
-		for cursor.Next(context.Background()) {
-			var message Message
-			if err := cursor.Decode(&message); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to decode message"})
-				return
-			}
-			messages = append(messages, message)
-		}
-
-		c.JSON(http.StatusOK, gin.H{"msg": messages, "userId": user})
-	})
-
+	r.GET("/messages", JWTMiddleware(), getAllMessages)
 	r.POST("/register", Register)
 	r.POST("/login", Login)
 
-	r.GET("/ws", func(c *gin.Context) {
-		conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-		defer conn.Close()
-
-		// Add the new client to the list of clients.
-		mutex.Lock()
-		clients[conn] = true
-		mutex.Unlock()
-
-		// Handle incoming messages from clients
-		go func() {
-			for {
-				var msg Message
-				err := conn.ReadJSON(&msg)
-				if err != nil {
-					log.Println(err)
-					return
-				}
-
-				StoreMessage(msg.Text, msg.UserID)
-
-				// Broadcast the message to all connected clients
-				// broadcast <- msg
-			}
-		}()
-
-		for {
-			var msg Message
-			err := conn.ReadJSON(&msg)
-			if err != nil {
-				// Remove the client from the list of clients.
-				mutex.Lock()
-				delete(clients, conn)
-				mutex.Unlock()
-				break
-			}
-
-			// Handle incoming messages and store them in MongoDB
-			StoreMessage(msg.Text, msg.UserID)
-			// fmt.Print(p)
-
-			// For demonstration, we'll simply broadcast the message to all connected clients.
-			// broadcastMessage(p)
-			broadcast <- msg
-		}
-	})
+	r.GET("/ws", handleWebsocket)
 	go handleBroadcast()
 
 	r.Run(":8080")
