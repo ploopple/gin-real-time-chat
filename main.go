@@ -296,10 +296,10 @@ func main() {
 
 			// For demonstration, we'll simply broadcast the message to all connected clients.
 			// broadcastMessage(p)
-			// broadcast <- msg
+			broadcast <- msg
 		}
-		// go handleBroadcast()
 	})
+	go handleBroadcast()
 
 	r.Run(":8080")
 }
