@@ -11,6 +11,7 @@ import (
 	"github.com/dgrijalva/jwt-go"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
+	"github.com/go-redis/redis/v8"
 	"github.com/gorilla/websocket"
 	"github.com/jinzhu/gorm"
 	_ "github.com/jinzhu/gorm/dialects/postgres"
@@ -53,7 +54,41 @@ var (
 	// Maintain a list of connected clients.
 	clients = make(map[*websocket.Conn]bool)
 	mutex   sync.Mutex
+
+	redisClient *redis.Client
 )
+
+// func JWTMiddleware() gin.HandlerFunc {
+// 	return func(c *gin.Context) {
+// 		tokenString := c.GetHeader("Authorization")
+
+// 		if tokenString == "" {
+// 			c.JSON(http.StatusUnauthorized, gin.H{"message": "Authorization header is missing"})
+// 			c.Abort()
+// 			return
+// 		}
+
+// 		token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+// 			return []byte("your-secret-key"), nil
+// 		})
+
+// 		if err != nil || !token.Valid {
+// 			c.JSON(http.StatusUnauthorized, gin.H{"message": "Invalid token"})
+// 			c.Abort()
+// 			return
+// 		}
+
+// 		claims, ok := token.Claims.(jwt.MapClaims)
+// 		if !ok {
+// 			c.JSON(http.StatusUnauthorized, gin.H{"message": "Invalid token claims"})
+// 			c.Abort()
+// 			return
+// 		}
+
+// 		c.Set("user_id", claims["user_id"])
+// 		c.Next()
+// 	}
+// }
 
 func JWTMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -65,24 +100,16 @@ func JWTMiddleware() gin.HandlerFunc {
 			return
 		}
 
-		token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
-			return []byte("your-secret-key"), nil
-		})
-
-		if err != nil || !token.Valid {
-			c.JSON(http.StatusUnauthorized, gin.H{"message": "Invalid token"})
+		// Check if the token exists in Redis
+		userID, err := redisClient.Get(context.Background(), tokenString).Uint64()
+		// fmt.Println(userID)
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"message": "Invalid or expired token"})
 			c.Abort()
 			return
 		}
 
-		claims, ok := token.Claims.(jwt.MapClaims)
-		if !ok {
-			c.JSON(http.StatusUnauthorized, gin.H{"message": "Invalid token claims"})
-			c.Abort()
-			return
-		}
-
-		c.Set("user_id", claims["user_id"])
+		c.Set("user_id", userID)
 		c.Next()
 	}
 }
@@ -137,6 +164,12 @@ func Login(c *gin.Context) {
 		return
 	}
 
+	errr := redisClient.Set(context.Background(), tokenString, user.ID, 24*time.Hour).Err()
+	if errr != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to store session"})
+		return
+	}
+
 	c.JSON(http.StatusOK, gin.H{"token": tokenString})
 }
 
@@ -164,7 +197,7 @@ func getAllMessages(c *gin.Context) {
 }
 
 func initMongoDB() {
-	clientOptions := options.Client().ApplyURI("mongodb://mongo:p5DqtCP4sd2psY7qvpzz@containers-us-west-136.railway.app:6055") // Update with your MongoDB URI
+	clientOptions := options.Client().ApplyURI("mongodb://mongo:vcI5hpG3qWyJlIPEhBdz@containers-us-west-146.railway.app:5809") // Update with your MongoDB URI
 	client, err := mongo.Connect(context.Background(), clientOptions)
 	if err != nil {
 		log.Fatal(err)
@@ -220,7 +253,7 @@ func handleWebsocket(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	defer conn.Close()
+	// defer conn.Close()
 
 	// Add the new client to the list of clients.
 	mutex.Lock()
@@ -258,11 +291,12 @@ func handleWebsocket(c *gin.Context) {
 		// For demonstration, we'll simply broadcast the message to all connected clients.
 		broadcast <- msg
 	}
+
 }
 
 func connectToPostgresDB() {
 	var err error
-	db, err = gorm.Open("postgres", "postgresql://postgres:VhdLOGcRBFAHk0lX2Jo5@containers-us-west-47.railway.app:7110/railway?sslmode=disable")
+	db, err = gorm.Open("postgres", "postgresql://postgres:qAZO2rvMOJlmniy3RlGJ@containers-us-west-96.railway.app:6295/railway?sslmode=disable")
 	if err != nil {
 		panic("Failed to connect to database")
 	}
@@ -282,7 +316,22 @@ func addCors(r *gin.Engine) {
 	r.Use(cors.New(config))
 
 }
+func initRedis() {
+	redisConnStr := "redis://default:Y4hOQVlUZXQxjQJZhQBN@containers-us-west-33.railway.app:6085"
+	options, err := redis.ParseURL(redisConnStr)
+	if err != nil {
+		log.Fatalf("Failed to parse Redis connection string: %v", err)
+	}
 
+	redisClient = redis.NewClient(options)
+
+	// Test the Redis connection
+	pong, err := redisClient.Ping(context.Background()).Result()
+	if err != nil {
+		log.Fatalf("Failed to connect to Redis: %v", err)
+	}
+	fmt.Println("Connected to Redis:", pong)
+}
 func main() {
 	r := gin.Default()
 	addCors(r)
@@ -292,14 +341,17 @@ func main() {
 
 	initMongoDB()
 	initMongoCollections()
-
-	defer db.Close()
+	initRedis()
 
 	r.GET("/messages", JWTMiddleware(), getAllMessages)
 	r.POST("/register", Register)
 	r.POST("/login", Login)
 
-	r.GET("/ws", handleWebsocket)
+	r.GET("/ws", handleWebsocket, func(ctx *gin.Context) {
+
+		go handleBroadcast()
+	})
+	defer db.Close()
 	go handleBroadcast()
 
 	r.Run(":8080")
